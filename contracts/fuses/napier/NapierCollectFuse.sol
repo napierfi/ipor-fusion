@@ -8,6 +8,9 @@ import {IPrincipalToken} from "./ext/IPrincipalToken.sol";
 
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 
+/// @notice Fuse for collecting Napier PT yield into the PlasmaVault safely.
+/// @dev Validates provided principal tokens against granted substrates before collecting.
+
 /// @notice Data for entering (collect interest) to the Napier V2 protocol
 /// @param principalToken Principal Token address to collect from
 struct NapierCollectFuseEnterData {
@@ -40,7 +43,7 @@ contract NapierCollectFuse is NapierUniversalRouterFuse {
     /// @notice Collects interest and external rewards if any
     function enter(NapierCollectFuseEnterData calldata data_) external {
         if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
-            revert NapierFuseIInvalidMarketId();
+            revert NapierFuseIInvalidToken();
         }
 
         // Collect interest (in units of the underlying token) and external rewards if any

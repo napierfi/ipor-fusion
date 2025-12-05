@@ -12,6 +12,9 @@ import {ActionConstants} from "./utils/ActionsConstants.sol";
 
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 
+/// @notice Fuse for supplying assets to mint PT+YT via the Napier universal router.
+/// @dev Short-circuits zero amounts and validates router, PT, and token substrates before execution.
+
 /// @notice Data for entering (Issue PT/YT with tokens) to the Napier V2 protocol
 /// @param principalToken Principal Token address to supply to
 /// @param tokenIn Asset to issue PT/YT with
@@ -46,9 +49,6 @@ contract NapierSupplyFuse is NapierUniversalRouterFuse {
 
     /// @notice Supplies assets into Napier PT, minting PT + YT into the vault
     function enter(NapierSupplyFuseEnterData calldata data_) external {
-        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
-            revert NapierFuseIInvalidMarketId();
-        }
         if (data_.amountIn == 0) {
             // NOTE: The following interaction relies on pre-transfer and CONTRACT_BALANCE.
             // Passing amountIn == 0 leaves the router free to sweep any residual balances (or to no-op silently).
@@ -56,10 +56,27 @@ contract NapierSupplyFuse is NapierUniversalRouterFuse {
             return;
         }
 
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, data_.tokenIn)) {
+            revert NapierFuseIInvalidToken();
+        }
+
         IPrincipalToken pt = data_.principalToken;
 
         address underlying = pt.underlying(); // vault shares
         address asset = pt.i_asset();
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, underlying)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, asset)) {
+            revert NapierFuseIInvalidToken();
+        }
 
         bytes memory commands;
         bytes[] memory inputs;
@@ -95,9 +112,13 @@ contract NapierSupplyFuse is NapierUniversalRouterFuse {
         // Router might consume that more tokens than we transferred but this only benefits the vault (we receive more tokens than we requested)
         // This can only happen if someone deliberately donates tokens to the router or if a previous call left dust.
         ERC20(data_.tokenIn).safeTransfer(address(ROUTER), data_.amountIn);
-        ROUTER.execute(commands, inputs);
+        ROUTER.execute(commands, inputs, block.timestamp);
 
-        uint256 principals = pt.balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = pt.balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
+        uint256 principals = balanceAfter - balanceBefore;
 
         emit NapierSupplyFuseEnter(VERSION, address(data_.principalToken), data_.tokenIn, principals);
     }

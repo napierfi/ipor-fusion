@@ -33,7 +33,7 @@ contract NapierPriceFeed is IPriceFeed {
     /// @notice Address of the Napier liquidity token (Toki pool token)
     address public immutable LIQUIDITY_TOKEN;
 
-    /// @notice Address of the price oracle middleware expected to supply USD prices
+    /// @notice Address of the price oracle middleware expected to supply USD prices for direct queries
     address public immutable PRICE_MIDDLEWARE;
 
     /// @notice Address of the asset used as base for the pricing asset (either PT or LP)
@@ -60,9 +60,9 @@ contract NapierPriceFeed is IPriceFeed {
         QUOTE = quote;
     }
 
-    /// @notice PT prices are returned in 8 decimals to match Chainlink semantics
+    /// @notice PT prices are returned in 18 decimals to align with middleware output expectations
     function decimals() public pure override returns (uint8) {
-        return 8;
+        return 18;
     }
 
     /// @inheritdoc IPriceFeed
@@ -79,7 +79,7 @@ contract NapierPriceFeed is IPriceFeed {
     {
         (, int256 unitPrice, , , ) = TOKI_CHAINLINK_ORACLE.latestRoundData();
 
-        (uint256 assetPrice, uint256 priceDecimals) = IPriceOracleMiddleware(PRICE_MIDDLEWARE).getAssetPrice(QUOTE);
+        (uint256 assetPrice, uint256 priceDecimals) = _middleware().getAssetPrice(QUOTE);
 
         uint256 scalingFactor = TOKI_CHAINLINK_ORACLE_DECIMALS + priceDecimals - decimals();
         price = ((unitPrice.toUint256() * assetPrice) / 10 ** scalingFactor).toInt256();
@@ -96,5 +96,19 @@ contract NapierPriceFeed is IPriceFeed {
     /// @return decimals_ Number of decimals returned by the middleware
     function getPricingAssetPrice() external view returns (uint256 price, uint256 decimals_) {
         return IPriceOracleMiddleware(PRICE_MIDDLEWARE).getAssetPrice(QUOTE);
+    }
+
+    /// @notice Resolves the price middleware based on the caller (middleware) context
+    /// @dev Allows reuse across vaults by delegating pricing to the caller's configuration
+    function _middleware() internal view returns (IPriceOracleMiddleware) {
+        if (msg.sender == address(0)) {
+            revert PriceOracleZeroAddress();
+        }
+
+        if (msg.sender.code.length == 0 || msg.sender == address(this)) {
+            return IPriceOracleMiddleware(PRICE_MIDDLEWARE);
+        }
+
+        return IPriceOracleMiddleware(msg.sender);
     }
 }

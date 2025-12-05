@@ -17,6 +17,9 @@ import {Commands} from "./utils/Commands.sol";
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 import {IV4Router} from "./ext/IV4Router.sol";
 
+/// @notice Fuse for swapping between underlying and PT through the Napier universal router with safeguards.
+/// @dev Validates substrates for all external addresses and enforces minimum outputs to limit slippage.
+
 /// @param tokenIn Asset to issue PT/YT with
 /// @param amountIn Amount of the asset to issue PT/YT with
 struct NapierSwapPtFuseData {
@@ -49,11 +52,29 @@ contract NapierSwapPtFuse is NapierUniversalRouterFuse {
     }
 
     function enter(NapierSwapPtFuseData calldata data_) external {
+        if (data_.amountIn == 0) {
+            return;
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
         if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.pool))) {
-            revert NapierFuseIInvalidMarketId();
+            revert NapierFuseIInvalidToken();
         }
 
         PoolKey memory key = _getPoolKey(data_.pool);
+        address tokenIn = Currency.unwrap(key.currency0);
+        address tokenOut = Currency.unwrap(key.currency1);
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, tokenIn)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, tokenOut)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (data_.minimumAmount == 0) {
+            revert NapierFuseIInvalidToken();
+        }
 
         // Buy PT with the underlying token
         bytes memory commands = abi.encodePacked(bytes1(uint8(Commands.V4_SWAP)));
@@ -68,7 +89,7 @@ contract NapierSwapPtFuse is NapierUniversalRouterFuse {
                 poolKey: key,
                 zeroForOne: true,
                 amountIn: data_.amountIn,
-                amountOutMinimum: 0,
+                amountOutMinimum: data_.minimumAmount,
                 hookData: ""
             })
         );
@@ -81,19 +102,45 @@ contract NapierSwapPtFuse is NapierUniversalRouterFuse {
         uint256 balanceBefore = key.currency1.balanceOf(address(this));
 
         key.currency0.transfer(address(ROUTER), data_.amountIn);
-        ROUTER.execute(commands, inputs);
+        ROUTER.execute(commands, inputs, block.timestamp);
 
-        uint256 amountOut = key.currency1.balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = key.currency1.balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
 
-        emit NapierSwapPtFuseEnter(VERSION, address(data_.pool), Currency.unwrap(key.currency0), amountOut);
+        uint256 amountOut = balanceAfter - balanceBefore;
+        if (amountOut < data_.minimumAmount) {
+            revert NapierFuseIInsufficientOutput();
+        }
+
+        emit NapierSwapPtFuseEnter(VERSION, address(data_.pool), tokenIn, amountOut);
     }
 
     function exit(NapierSwapPtFuseData calldata data_) external {
+        if (data_.amountIn == 0) {
+            return;
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
         if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.pool))) {
-            revert NapierFuseIInvalidMarketId();
+            revert NapierFuseIInvalidToken();
         }
 
         PoolKey memory key = _getPoolKey(data_.pool);
+        address tokenIn = Currency.unwrap(key.currency1);
+        address tokenOut = Currency.unwrap(key.currency0);
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, tokenIn)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, tokenOut)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (data_.minimumAmount == 0) {
+            revert NapierFuseIInvalidToken();
+        }
 
         // Sell PT for the underlying token
         bytes memory commands = abi.encodePacked(bytes1(uint8(Commands.V4_SWAP)));
@@ -109,7 +156,7 @@ contract NapierSwapPtFuse is NapierUniversalRouterFuse {
                 poolKey: key,
                 zeroForOne: false,
                 amountIn: data_.amountIn,
-                amountOutMinimum: 0,
+                amountOutMinimum: data_.minimumAmount,
                 hookData: ""
             })
         );
@@ -122,10 +169,18 @@ contract NapierSwapPtFuse is NapierUniversalRouterFuse {
         uint256 balanceBefore = key.currency0.balanceOf(address(this));
 
         key.currency1.transfer(address(ROUTER), data_.amountIn);
-        ROUTER.execute(commands, inputs);
+        ROUTER.execute(commands, inputs, block.timestamp);
 
-        uint256 amountOut = key.currency0.balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = key.currency0.balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
 
-        emit NapierSwapPtFuseExit(VERSION, address(data_.pool), Currency.unwrap(key.currency0), amountOut);
+        uint256 amountOut = balanceAfter - balanceBefore;
+        if (amountOut < data_.minimumAmount) {
+            revert NapierFuseIInsufficientOutput();
+        }
+
+        emit NapierSwapPtFuseExit(VERSION, address(data_.pool), tokenOut, amountOut);
     }
 }

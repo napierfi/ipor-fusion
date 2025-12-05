@@ -12,6 +12,9 @@ import {ActionConstants} from "./utils/ActionsConstants.sol";
 
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 
+/// @notice Fuse for redeeming PT into assets after maturity through the universal router.
+/// @dev Validates all external addresses as substrates and enforces output non-underflow.
+
 /// @notice Data for entering (redeem PT for token) to the Napier V2 protocol
 /// @param principalToken Principal Token address to redeem from
 /// @param principals Exact amount of PT to redeem
@@ -47,17 +50,31 @@ contract NapierRedeemFuse is NapierUniversalRouterFuse {
 
     /// @notice Redeems PTs for tokens after the maturity
     function enter(NapierRedeemFuseEnterData calldata data_) external {
-        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
-            revert NapierFuseIInvalidMarketId();
-        }
-
         if (data_.principals == 0) {
             return;
+        }
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
+            revert NapierFuseIInvalidToken();
+        }
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, data_.tokenOut)) {
+            revert NapierFuseIInvalidToken();
         }
 
         IPrincipalToken pt = data_.principalToken;
         address underlyingToken = pt.underlying();
         address asset = pt.i_asset();
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, underlyingToken)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, asset)) {
+            revert NapierFuseIInvalidToken();
+        }
 
         bytes memory commands;
         bytes[] memory inputs;
@@ -90,9 +107,13 @@ contract NapierRedeemFuse is NapierUniversalRouterFuse {
 
         // Pre-transfer PT to the router
         ERC20(address(pt)).safeTransfer(address(ROUTER), data_.principals);
-        ROUTER.execute(commands, inputs);
+        ROUTER.execute(commands, inputs, block.timestamp);
 
-        uint256 amountOut = ERC20(data_.tokenOut).balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = ERC20(data_.tokenOut).balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
+        uint256 amountOut = balanceAfter - balanceBefore;
 
         emit NapierRedeemFuseEnter(VERSION, address(data_.principalToken), data_.tokenOut, amountOut);
     }

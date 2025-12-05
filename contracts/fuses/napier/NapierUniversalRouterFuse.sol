@@ -11,9 +11,8 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IUniversalRouter} from "./ext/IUniversalRouter.sol";
 import {ITokiPoolToken} from "./ext/ITokiPoolToken.sol";
 
-/// @title NapierUniversalRouterFuse
-/// @notice Fuse for Napier V2 TokiHook universal router
-/// @dev Substrates in this fuse are the Napier V2 TokiHook pool addresses
+/// @notice Shared base for Napier fuses that route through the universal router.
+/// @dev Centralizes versioning, market configuration, and common errors/helpers.
 abstract contract NapierUniversalRouterFuse is IFuseCommon {
     /// @notice Version of this contract for tracking
     address public immutable VERSION;
@@ -26,8 +25,10 @@ abstract contract NapierUniversalRouterFuse is IFuseCommon {
     error NapierFuseIInvalidMarketId();
     /// @notice Error thrown when an invalid router address is provided
     error NapierFuseIInvalidRouter();
-    /// @notice Error thrown when an invalid token is provided
+    /// @notice Error thrown when an invalid token or substrate is provided
     error NapierFuseIInvalidToken();
+    /// @notice Error thrown when the execution returns fewer assets than expected
+    error NapierFuseIInsufficientOutput();
 
     function _getPoolKey(ITokiPoolToken pool) internal view returns (PoolKey memory) {
         return pool.i_poolKey();

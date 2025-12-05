@@ -12,6 +12,9 @@ import {ActionConstants} from "./utils/ActionsConstants.sol";
 
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 
+/// @notice Fuse for combining PT and YT back into assets through the universal router.
+/// @dev Performs early zero-amount short-circuit and substrate validation to keep the vault safe.
+
 /// @notice Data for entering (Early redeem PT/YT for tokens) to the Napier V2 protocol
 /// @param principalToken Principal Token address to redeem from
 /// @param tokenOut Asset to redeem PT/YT for
@@ -46,22 +49,36 @@ contract NapierCombineFuse is NapierUniversalRouterFuse {
 
     /// @notice Early redeem PT and YT into the tokenOut (before/after the maturity)
     function enter(NapierCombineFuseEnterData calldata data_) external {
-        IPrincipalToken pt = data_.principalToken;
-
-        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.principalToken))) {
-            revert NapierFuseIInvalidMarketId();
-        }
-
-        address yt = pt.i_yt();
-        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, yt)) {
-            revert NapierFuseIInvalidMarketId();
-        }
         if (data_.principals == 0) {
             return;
         }
 
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
+
+        IPrincipalToken pt = data_.principalToken;
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(pt))) {
+            revert NapierFuseIInvalidToken();
+        }
+
+        address yt = pt.i_yt();
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, yt)) {
+            revert NapierFuseIInvalidToken();
+        }
+
         address underlying = pt.underlying();
         address asset = pt.i_asset();
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, underlying)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, asset)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, data_.tokenOut)) {
+            revert NapierFuseIInvalidToken();
+        }
 
         bytes memory commands;
         bytes[] memory inputs;
@@ -90,9 +107,13 @@ contract NapierCombineFuse is NapierUniversalRouterFuse {
         ERC20(address(pt)).safeTransfer(address(ROUTER), data_.principals);
         ERC20(yt).safeTransfer(address(ROUTER), data_.principals);
 
-        ROUTER.execute(commands, inputs);
+        ROUTER.execute(commands, inputs, block.timestamp);
 
-        uint256 amountOut = ERC20(data_.tokenOut).balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = ERC20(data_.tokenOut).balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
+        uint256 amountOut = balanceAfter - balanceBefore;
 
         emit NapierCombineFuseEnter(VERSION, address(data_.principalToken), data_.tokenOut, amountOut);
     }

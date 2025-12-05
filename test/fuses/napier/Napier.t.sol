@@ -269,12 +269,19 @@ contract NapierSupplyFuseTest is Test {
     function _setupNapierMarket() private {
         vm.startPrank(ATOMIST);
 
-        // Add substrates - pool, principal token, and YT token need to be granted
+        // Add substrates - pool, router, tokens, and helper contracts need to be granted
         address yt = IPrincipalToken(principalToken).i_yt();
-        bytes32[] memory substrates = new bytes32[](3);
+        address underlyingToken = IPrincipalToken(principalToken).underlying();
+        address assetToken = IPrincipalToken(principalToken).i_asset();
+
+        bytes32[] memory substrates = new bytes32[](7);
         substrates[0] = PlasmaVaultConfigLib.addressToBytes32(pool);
         substrates[1] = PlasmaVaultConfigLib.addressToBytes32(principalToken);
         substrates[2] = PlasmaVaultConfigLib.addressToBytes32(yt);
+        substrates[3] = PlasmaVaultConfigLib.addressToBytes32(NapierConstants.ARB_UNIVERSAL_ROUTER);
+        substrates[4] = PlasmaVaultConfigLib.addressToBytes32(PERMIT2);
+        substrates[5] = PlasmaVaultConfigLib.addressToBytes32(underlyingToken);
+        substrates[6] = PlasmaVaultConfigLib.addressToBytes32(assetToken);
 
         bytes32[] memory erc20Substrates = new bytes32[](2);
         erc20Substrates[0] = PlasmaVaultConfigLib.addressToBytes32(USDC);
@@ -737,7 +744,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapPtFuseData memory data = NapierSwapPtFuseData({
             pool: ITokiPoolToken(pool),
             amountIn: amountIn,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);
@@ -773,7 +780,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapPtFuseData memory data = NapierSwapPtFuseData({
             pool: ITokiPoolToken(pool),
             amountIn: amountIn,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);
@@ -796,7 +803,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapPtFuseData memory data = NapierSwapPtFuseData({
             pool: ITokiPoolToken(badPool),
             amountIn: 1000,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);
@@ -814,7 +821,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapPtFuseData memory data = NapierSwapPtFuseData({
             pool: ITokiPoolToken(badPool),
             amountIn: 1000,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);
@@ -841,7 +848,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapYtEnterFuseData memory data = NapierSwapYtEnterFuseData({
             pool: ITokiPoolToken(pool),
             amountIn: amountIn,
-            minimumAmount: 0,
+            minimumAmount: 1,
             approxParams: ApproximationParams({guessMin: 0, guessMax: 0, eps: 0})
         });
 
@@ -883,7 +890,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapYtExitFuseData memory data = NapierSwapYtExitFuseData({
             pool: ITokiPoolToken(pool),
             amountIn: amountIn,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);
@@ -906,7 +913,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapYtEnterFuseData memory data = NapierSwapYtEnterFuseData({
             pool: ITokiPoolToken(badPool),
             amountIn: 1000,
-            minimumAmount: 0,
+            minimumAmount: 1,
             approxParams: ApproximationParams({guessMin: 0, guessMax: 0, eps: 0})
         });
 
@@ -925,7 +932,7 @@ contract NapierSupplyFuseTest is Test {
         NapierSwapYtExitFuseData memory data = NapierSwapYtExitFuseData({
             pool: ITokiPoolToken(badPool),
             amountIn: 1000,
-            minimumAmount: 0
+            minimumAmount: 1
         });
 
         FuseAction[] memory actions = new FuseAction[](1);

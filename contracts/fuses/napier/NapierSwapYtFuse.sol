@@ -15,6 +15,9 @@ import {ApproximationParams} from "./ext/ApproximationParams.sol";
 import {NapierUniversalRouterFuse} from "./NapierUniversalRouterFuse.sol";
 import {IPermit2} from "../balancer/ext/IPermit2.sol";
 
+/// @notice Fuse for swapping between underlying and YT through the Napier universal router with permit safety.
+/// @dev Ensures substrate validation, slippage bounds, and zeroes Permit2 approvals after use.
+
 /// @param tokenIn Asset to issue PT/YT with
 /// @param amountIn Amount of the asset to issue PT/YT with
 /// @param minimumAmount Minimum amount of the asset to receive
@@ -60,12 +63,37 @@ contract NapierSwapYtFuse is NapierUniversalRouterFuse {
     }
 
     function enter(NapierSwapYtEnterFuseData calldata data_) external {
+        if (data_.amountIn == 0) {
+            return;
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, PERMIT2)) {
+            revert NapierFuseIInvalidToken();
+        }
         if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.pool))) {
-            revert NapierFuseIInvalidMarketId();
+            revert NapierFuseIInvalidToken();
         }
 
         PoolKey memory key = _getPoolKey(data_.pool);
         address yt = IPrincipalToken(Currency.unwrap(key.currency1)).i_yt();
+
+        address underlying = Currency.unwrap(key.currency0);
+        address pt = Currency.unwrap(key.currency1);
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, underlying)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, pt)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, yt)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (data_.minimumAmount == 0) {
+            revert NapierFuseIInvalidToken();
+        }
 
         // Buy YT with the underlying token
         bytes memory commands = abi.encodePacked(bytes1(uint8(Commands.YT_SWAP_UNDERLYING_FOR_YT)));
@@ -81,20 +109,53 @@ contract NapierSwapYtFuse is NapierUniversalRouterFuse {
 
         uint256 balanceBefore = ERC20(yt).balanceOf(address(this));
 
-        _setupPermit2Approval(Currency.unwrap(key.currency0));
-        ROUTER.execute(commands, inputs);
+        _setupPermit2Approval(underlying, data_.amountIn);
+        ROUTER.execute(commands, inputs, block.timestamp);
+        _clearPermit2Approval(underlying);
 
-        uint256 amountOut = ERC20(yt).balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = ERC20(yt).balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
+        uint256 amountOut = balanceAfter - balanceBefore;
+        if (amountOut < data_.minimumAmount) {
+            revert NapierFuseIInsufficientOutput();
+        }
 
         emit NapierSwapYtFuseEnter(VERSION, address(data_.pool), yt, amountOut);
     }
 
     function exit(NapierSwapYtExitFuseData calldata data_) external {
+        if (data_.amountIn == 0) {
+            return;
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(ROUTER))) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, PERMIT2)) {
+            revert NapierFuseIInvalidToken();
+        }
         if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, address(data_.pool))) {
-            revert NapierFuseIInvalidMarketId();
+            revert NapierFuseIInvalidToken();
         }
 
         PoolKey memory key = _getPoolKey(data_.pool);
+        address underlying = Currency.unwrap(key.currency0);
+        address pt = Currency.unwrap(key.currency1);
+        address yt = IPrincipalToken(pt).i_yt();
+
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, underlying)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, pt)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (!PlasmaVaultConfigLib.isSubstrateAsAssetGranted(MARKET_ID, yt)) {
+            revert NapierFuseIInvalidToken();
+        }
+        if (data_.minimumAmount == 0) {
+            revert NapierFuseIInvalidToken();
+        }
 
         // Sell PT for the underlying token
         bytes memory commands = abi.encodePacked(bytes1(uint8(Commands.YT_SWAP_YT_FOR_UNDERLYING)));
@@ -103,18 +164,38 @@ contract NapierSwapYtFuse is NapierUniversalRouterFuse {
 
         uint256 balanceBefore = key.currency0.balanceOf(address(this));
 
-        _setupPermit2Approval(IPrincipalToken(Currency.unwrap(key.currency1)).i_yt());
-        ROUTER.execute(commands, inputs);
+        _setupPermit2Approval(yt, data_.amountIn);
+        ROUTER.execute(commands, inputs, block.timestamp);
+        _clearPermit2Approval(yt);
 
-        uint256 amountOut = key.currency0.balanceOf(address(this)) - balanceBefore;
+        uint256 balanceAfter = key.currency0.balanceOf(address(this));
+        if (balanceAfter < balanceBefore) {
+            revert NapierFuseIInsufficientOutput();
+        }
+        uint256 amountOut = balanceAfter - balanceBefore;
+        if (amountOut < data_.minimumAmount) {
+            revert NapierFuseIInsufficientOutput();
+        }
 
         emit NapierSwapYtFuseExit(VERSION, address(data_.pool), Currency.unwrap(key.currency0), amountOut);
     }
 
     /// @notice Sets up Permit2 approval for the router to pull tokens
     /// @param token The token to approve
-    function _setupPermit2Approval(address token) private {
-        ERC20(token).forceApprove(PERMIT2, type(uint256).max);
-        IPermit2(PERMIT2).approve(token, address(ROUTER), type(uint160).max, uint48(block.timestamp + 1 hours));
+    /// @param amount The allowance to grant for this execution
+    function _setupPermit2Approval(address token, uint256 amount) private {
+        if (amount > type(uint160).max) {
+            revert NapierFuseIInvalidToken();
+        }
+
+        ERC20(token).forceApprove(PERMIT2, amount);
+        IPermit2(PERMIT2).approve(token, address(ROUTER), uint160(amount), uint48(block.timestamp + 1 hours));
+    }
+
+    /// @notice Clears Permit2 approval after router execution to minimize allowance risk
+    /// @param token The token to reset approvals for
+    function _clearPermit2Approval(address token) private {
+        ERC20(token).forceApprove(PERMIT2, 0);
+        IPermit2(PERMIT2).approve(token, address(ROUTER), 0, 0);
     }
 }
